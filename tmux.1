@@ -5431,6 +5431,69 @@ captures the mouse and allows mouse events to be bound as key bindings.
 See the
 .Sx MOUSE SUPPORT
 section for details.
+.It Ic panel\-enabled[] Ar on | off
+Show or hide an indexed panel without removing its configuration.
+Panels are on by default when their position is configured.
+.It Ic panel\-format[] Ar format
+Set the format drawn in an indexed panel.
+A newline character or the
+.Ic nl
+style starts another row.
+Rows beyond the panel height are trimmed, and list rows can scroll to keep
+.Ic list=focus
+visible.
+.It Ic panel\-position[] Ar left | right | top | bottom
+Define an indexed panel at a terminal edge.
+The array key is a nonnegative integer that identifies the panel.
+Several panels can occupy each edge.
+Top and bottom panels span the terminal width; left and right panels fill the
+rows between them.
+Panels at each edge appear in ascending index order from the terminal edge
+towards the window.
+The existing
+.Ic status
+and
+.Ic side\-status
+areas appear outside indexed panels at their respective edges.
+Status lines remain full terminal width.
+Panels that do not fit while leaving at least one row and column for the
+window are hidden for that client until its terminal grows.
+.It Ic panel\-size[] Ar cells
+Set the width of a left or right panel, or the height of a top or bottom
+panel, in cells.
+The default is one cell.
+Left and right panels at least two cells wide include a vertical separator on
+the edge next to the window; the separator occupies one of those cells.
+.It Ic panel\-style[] Ar style
+Set the style of an indexed panel.
+The default is
+.Ic status\-style .
+For how to specify
+.Ar style ,
+see the
+.Sx STYLES
+section.
+.Pp
+For example, the following adds two independently controlled panels on the
+left and a two-row panel at the top:
+.Bd -literal -offset indent
+set -g panel-position[0] left
+set -g panel-size[0] 18
+set -g panel-format[0] '#{W:#I:#W#[nl]}'
+set -g panel-position[1] left
+set -g panel-size[1] 8
+set -g panel-format[1] '#{session_name}'
+set -g panel-position[2] top
+set -g panel-size[2] 2
+set -g panel-format[2] 'Jobs#[nl]#{pane_title}'
+set -g panel-enabled[1] off
+.Ed
+.Pp
+Setting any one of these arrays for a session replaces the entire inherited
+array of that name, as with other array options.
+Use
+.Ic show-options
+with an array index to inspect a configured value.
 .It Ic prefix Ar key
 Set the key accepted as a prefix key.
 In addition to the standard keys described under
@@ -7403,6 +7466,7 @@ The following variables are available, where appropriate:
 .It Li "mouse_button_flag" Ta "" Ta "Pane mouse button flag"
 .It Li "mouse_hyperlink" Ta "" Ta "Hyperlink under mouse, if any"
 .It Li "mouse_line" Ta "" Ta "Line under mouse, if any"
+.It Li "mouse_panel" Ta "" Ta "Panel index, status or side-status under mouse"
 .It Li "mouse_sgr_flag" Ta "" Ta "Pane mouse SGR flag"
 .It Li "mouse_standard_flag" Ta "" Ta "Pane mouse standard flag"
 .It Li "mouse_status_line" Ta "" Ta "Status line on which mouse event took place"
@@ -7959,7 +8023,19 @@ terminal.
 By default, the status line is enabled and one line in height (it may be
 disabled or made multiple lines with the
 .Ic status
-session option) and contains, from left-to-right: the name of the current
+session option).
+Additional panels may be configured on any edge with the
+.Ic panel\-position[]
+option, independently of the status line.
+The
+.Ic status
+and
+.Ic side\-status
+options continue to control their existing areas, and all status areas refresh
+at the
+.Ic status\-interval
+interval.
+The default status line contains, from left-to-right: the name of the current
 session in square brackets; the window list; the title of the active pane
 in double quotes; and the time and date.
 .Pp

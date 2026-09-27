@@ -317,24 +317,10 @@ cmd_join_pane_mouse_move(struct client *c, struct mouse_event *m)
 	w = wl->window;
 	lc = wp->layout_cell;
 
-	y = m->y + m->oy; x = m->x + m->ox;
-	if (m->statusat == 0 && y >= (int)m->statuslines)
-		y -= m->statuslines;
-	else if (m->statusat > 0 && y >= m->statusat)
-		y = m->statusat - 1;
-	if (m->sideat == 0 && x >= (int)m->sidecols)
-		x -= m->sidecols;
-	else if (m->sideat > 0 && x >= m->sideat)
-		x = m->sideat - 1;
-	ly = m->ly + m->oy; lx = m->lx + m->ox;
-	if (m->statusat == 0 && ly >= (int)m->statuslines)
-		ly -= m->statuslines;
-	else if (m->statusat > 0 && ly >= m->statusat)
-		ly = m->statusat - 1;
-	if (m->sideat == 0 && lx >= (int)m->sidecols)
-		lx -= m->sidecols;
-	else if (m->sideat > 0 && lx >= m->sideat)
-		lx = m->sideat - 1;
+	y = status_panels_mouse_y(m, m->y);
+	x = status_panels_mouse_x(m, m->x);
+	ly = status_panels_mouse_y(m, m->ly);
+	lx = status_panels_mouse_x(m, m->lx);
 
 	if (x != lx || y != ly) {
 		lc->g.xoff += x - lx;

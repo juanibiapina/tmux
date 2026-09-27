@@ -1700,6 +1700,9 @@ struct mouse_event {
 	u_int		statuslines;
 	int		sideat;
 	u_int		sidecols;
+	int64_t		panel;	/* -1 pane, -2 status, -3 side status */
+	u_int		panel_x, panel_y, panel_sx, panel_sy;
+	u_int		window_x, window_y, window_sx, window_sy;
 
 	u_int		x;
 	u_int		y;
@@ -2102,6 +2105,28 @@ struct side_status_line {
 	struct style_ranges	 ranges;
 };
 
+enum status_panel_edge {
+	STATUS_PANEL_LEFT, STATUS_PANEL_RIGHT,
+	STATUS_PANEL_TOP, STATUS_PANEL_BOTTOM
+};
+
+struct status_panel {
+	u_int			 index;
+	enum status_panel_edge	 edge;
+	u_int			 x, y, sx, sy;
+	struct side_status_line	 line;
+};
+
+struct status_panel_layout {
+	struct status_panel	**panels;
+	u_int			 count;
+	struct session		*session;
+	u_int			 x, y, sx, sy;
+	u_int			 side_x, side_y, side_sx, side_sy;
+	u_int			 tty_sx, tty_sy;
+	u_int			 generation;
+};
+
 /* File in client. */
 typedef void (*client_file_cb) (struct client *, const char *, int, int,
     struct evbuffer *, void *);
@@ -2269,6 +2294,7 @@ struct client {
 
 	struct status_line	 status;
 	struct side_status_line	 side_status;
+	struct status_panel_layout panels;
 	struct event		 cycle_timer;
 	enum client_theme	 theme;
 
@@ -3385,6 +3411,15 @@ void	 status_side_init(struct client *);
 void	 status_side_free(struct client *);
 int	 status_side_redraw(struct client *);
 struct style_range *status_side_get_range(struct client *, u_int, u_int);
+void	 status_panels_invalidate(void);
+struct status_panel_layout *status_panels_get(struct client *);
+void	 status_panels_window(struct client *, u_int *, u_int *, u_int *, u_int *);
+struct status_panel *status_panels_at(struct client *, u_int, u_int);
+struct style_range *status_panels_get_range(struct status_panel *, u_int, u_int);
+u_int	 status_panels_mouse_x(struct mouse_event *, u_int);
+u_int	 status_panels_mouse_y(struct mouse_event *, u_int);
+int	 status_panels_redraw(struct client *, int);
+void	 status_panels_draw(struct client *);
 struct style_range *status_get_range(struct client *, u_int, u_int);
 void	 status_init(struct client *);
 void	 status_free(struct client *);

@@ -766,19 +766,9 @@ cmd_mouse_at(struct window_pane *wp, struct mouse_event *m, u_int *xp,
 {
 	u_int	x, y;
 
-	if (last) {
-		x = m->lx + m->ox;
-		y = m->ly + m->oy;
-	} else {
-		x = m->x + m->ox;
-		y = m->y + m->oy;
-	}
+	x = status_panels_mouse_x(m, last ? m->lx : m->x);
+	y = status_panels_mouse_y(m, last ? m->ly : m->y);
 	log_debug("%s: x=%u, y=%u%s", __func__, x, y, last ? " (last)" : "");
-
-	if (m->statusat == 0 && y >= m->statuslines)
-		y -= m->statuslines;
-	if (m->sideat == 0 && x >= m->sidecols)
-		x -= m->sidecols;
 
 	if ((int)x < wp->xoff || (int)x >= wp->xoff + (int)wp->sx)
 		return (-1);

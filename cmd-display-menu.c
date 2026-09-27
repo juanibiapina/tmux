@@ -116,26 +116,8 @@ cmd_display_menu_get_menu_pos(struct client *tc, struct cmdq_item *item,
 
 	ft = format_create_from_target(item);
 	if (event->m.valid) {
-		if (event->m.sideat == 0) {
-			if (event->m.x >= event->m.sidecols)
-				mouse_x = event->m.x - event->m.sidecols + ox;
-			else
-				mouse_x = ox;
-		} else if (event->m.sideat > 0 &&
-		    event->m.x >= (u_int)event->m.sideat)
-			mouse_x = ox + sx - 1;
-		else
-			mouse_x = event->m.x + ox;
-		if (event->m.statusat == 0) {
-			if (event->m.y >= event->m.statuslines)
-				mouse_y = event->m.y - event->m.statuslines + oy;
-			else
-				mouse_y = oy;
-		} else if (event->m.statusat > 0 &&
-		    event->m.y >= (u_int)event->m.statusat) {
-			mouse_y = oy + sy - 1;
-		} else
-			mouse_y = event->m.y + oy;
+		mouse_x = status_panels_mouse_x(&event->m, event->m.x);
+		mouse_y = status_panels_mouse_y(&event->m, event->m.y);
 		format_add(ft, "popup_mouse_x", "%ld", mouse_x);
 		format_add(ft, "popup_mouse_y", "%ld", mouse_y);
 	}

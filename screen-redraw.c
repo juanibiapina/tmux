@@ -235,8 +235,8 @@ struct redraw_draw_ctx {
 	struct window_pane	*active;
 	struct window_pane	*marked;
 
-	u_int			 status_lines;
-	u_int			 side_left;
+	u_int			 window_y;
+	u_int			 window_x;
 	enum pane_lines		 pane_lines;
 	struct grid_cell	 default_gc;
 
@@ -281,8 +281,7 @@ redraw_get_window_offset(struct client *c, u_int *ox, u_int *oy, u_int *sx,
 
 	tty_window_offset(&c->tty, ox, oy, sx, sy);
 
-	tty_sx = c->tty.sx - status_side_size(c);
-	tty_sy = c->tty.sy - status_line_size(c);
+	status_panels_window(c, NULL, NULL, &tty_sx, &tty_sy);
 	if (*sx < tty_sx)
 		*sx = tty_sx;
 	if (*sy < tty_sy)
@@ -1121,7 +1120,7 @@ redraw_draw_pane_span(struct redraw_draw_ctx *dctx,
 	style_ctx.palette = &wp->palette;
 	style_ctx.hyperlinks = s->hyperlinks;
 
-	px = span->data.p.px + (x - dctx->side_left - span->x);
+	px = span->data.p.px + (x - dctx->window_x - span->x);
 	py = span->data.p.py;
 	tty_draw_line(tty, s, px, py, n, x, y, &style_ctx);
 }
@@ -1275,7 +1274,7 @@ redraw_draw_status_span(struct redraw_draw_ctx *dctx,
 	struct screen		*s = &wp->status_screen;
 	u_int			 px, sx = screen_size_x(s);
 
-	px = span->data.st.offset + (x - dctx->side_left - span->x);
+	px = span->data.st.offset + (x - dctx->window_x - span->x);
 	if (px < sx) {
 		if (n > sx - px)
 			n = sx - px;
@@ -1337,7 +1336,7 @@ redraw_draw_scrollbar_span(struct redraw_draw_ctx *dctx,
 
 	sb_w = sb_style->width;
 	sb_pad = sb_style->pad;
-	off = x - dctx->side_left - span->x;
+	off = x - dctx->window_x - span->x;
 
 	tty_cursor(tty, x, y);
 	for (i = 0; i < n; i++) {
@@ -1371,7 +1370,7 @@ redraw_draw_menu_span(struct redraw_draw_ctx *dctx,
 	struct screen		*s = menu_screen(span->data.m.md);
 	u_int			 px;
 
-	px = span->data.m.px + (x - dctx->side_left - span->x);
+	px = span->data.m.px + (x - dctx->window_x - span->x);
 	tty_draw_line(tty, s, px, span->data.m.py, n, x, y, NULL);
 }
 
@@ -1382,7 +1381,7 @@ redraw_draw_span(struct redraw_draw_ctx *dctx, struct redraw_span *span,
 {
 	struct redraw_span_data	*data = &span->data;
 	enum redraw_span_type	 type = data->type;
-	u_int			 x = dctx->side_left + span->x;
+	u_int			 x = dctx->window_x + span->x;
 
 	if (type == REDRAW_SPAN_STATUS && ~data->st.wp->flags & PANE_NEWSTATUS)
 		return;
@@ -1431,10 +1430,7 @@ redraw_draw_pane_lines(struct redraw_draw_ctx *dctx, struct window_pane *wp,
 
 	for (y = top; y < bottom; y++) {
 		line = &scene->lines[y];
-		if (dctx->flags & REDRAW_STATUS_TOP)
-			cy = dctx->status_lines + y;
-		else
-			cy = y;
+		cy = dctx->window_y + y;
 		if (flags & REDRAW_PANE) {
 			spans = &line->spans[REDRAW_SPAN_PANE];
 			TAILQ_FOREACH(span, spans, entry) {
@@ -1464,10 +1460,7 @@ redraw_draw_lines(struct redraw_draw_ctx *dctx, int flags)
 
 	for (y = 0; y < scene->sy; y++) {
 		line = &scene->lines[y];
-		if (dctx->flags & REDRAW_STATUS_TOP)
-			cy = dctx->status_lines + y;
-		else
-			cy = y;
+		cy = dctx->window_y + y;
 		for (type = 0; type < REDRAW_SPAN_TYPES; type++) {
 			if (!REDRAW_IS_ALL(flags)) {
 				switch (type) {
@@ -1521,10 +1514,7 @@ redraw_draw_menu_lines(struct redraw_draw_ctx *dctx)
 
 	for (y = 0; y < scene->sy; y++) {
 		line = &scene->lines[y];
-		if (dctx->flags & REDRAW_STATUS_TOP)
-			cy = dctx->status_lines + y;
-		else
-			cy = y;
+		cy = dctx->window_y + y;
 		TAILQ_FOREACH(span, &line->spans[REDRAW_SPAN_MENU], entry)
 			redraw_draw_span(dctx, span, cy);
 	}
@@ -1588,7 +1578,6 @@ redraw_set_draw_context(struct redraw_draw_ctx *dctx,
 	struct session	*s = c->session;
 	struct options	*oo = s->options;
 	struct tty	*tty = &c->tty;
-	u_int		 lines;
 
 	memset(dctx, 0, sizeof *dctx);
 	dctx->scene = scene;
@@ -1597,13 +1586,10 @@ redraw_set_draw_context(struct redraw_draw_ctx *dctx,
 		dctx->marked = marked_pane.wp;
 	dctx->active = s->curw->window->active;
 
-	lines = status_line_size(c);
 	if (options_get_number(oo, "status-position") == 0)
 		dctx->flags |= REDRAW_STATUS_TOP;
-	dctx->status_lines = lines;
-
-	if (status_side_at_column(c) == 0)
-		dctx->side_left = status_side_size(c);
+	status_panels_window(c, &dctx->window_x, &dctx->window_y,
+	    NULL, NULL);
 
 	if ((c->flags & CLIENT_UTF8) && tty_term_has(tty->term, TTYC_BIDI))
 		dctx->flags |= REDRAW_ISOLATES;
@@ -1633,10 +1619,7 @@ redraw_draw_pane_prompt(struct redraw_draw_ctx *dctx, struct window_pane *wp)
 	if (wy < oy || wy >= oy + sy)
 		return;
 	line = wy - oy;
-	if (dctx->flags & REDRAW_STATUS_TOP)
-		cy = dctx->status_lines + line;
-	else
-		cy = line;
+	cy = dctx->window_y + line;
 
 	if (wp->xoff + (int)wp->sx <= ox || wp->xoff >= ox + sx)
 		return;
@@ -1661,7 +1644,7 @@ redraw_draw_pane_prompt(struct redraw_draw_ctx *dctx, struct window_pane *wp)
 	prompt_draw(wp->prompt, &pdd);
 	screen_write_stop(&ctx);
 
-	tty_draw_line(tty, &screen, 0, offset, width, dctx->side_left + px, cy,
+	tty_draw_line(tty, &screen, 0, offset, width, dctx->window_x + px, cy,
 	    NULL);
 	screen_free(&screen);
 }
@@ -1700,9 +1683,12 @@ redraw_draw(struct client *c, struct window_pane *wp, int flags)
 	}
 
 	if (flags & REDRAW_SIDE_STATUS) {
-		if (status_side_size(c) == 0)
-			flags &= ~REDRAW_SIDE_STATUS;
-		else if (!status_side_redraw(c) && !REDRAW_IS_ALL(flags))
+		int side_changed = 0, panels_changed;
+
+		if (status_side_size(c) != 0)
+			side_changed = status_side_redraw(c);
+		panels_changed = status_panels_redraw(c, REDRAW_IS_ALL(flags));
+		if (!side_changed && !panels_changed && !REDRAW_IS_ALL(flags))
 			flags &= ~REDRAW_SIDE_STATUS;
 		if (flags == 0)
 			return;
@@ -1791,10 +1777,7 @@ redraw_draw(struct client *c, struct window_pane *wp, int flags)
 		side_cols = status_side_size(c);
 		side_x = status_side_at_column(c);
 		if (side_cols != 0 && side_x != -1) {
-			if (dctx.flags & REDRAW_STATUS_TOP)
-				y = dctx.status_lines;
-			else
-				y = 0;
+			y = status_panels_get(c)->side_y;
 			for (i = 0; i < status_side_rows(c); i++) {
 				tty_draw_line(tty, &c->side_status.screen, 0, i,
 				    side_cols, side_x, y + i, NULL);
@@ -1802,8 +1785,11 @@ redraw_draw(struct client *c, struct window_pane *wp, int flags)
 		}
 	}
 
+	if (flags & REDRAW_SIDE_STATUS)
+		status_panels_draw(c);
+
 	if (flags & REDRAW_STATUS) {
-		lines = dctx.status_lines;
+		lines = status_line_size(c);
 		if (c->message_string != NULL || c->prompt != NULL)
 			lines = (lines == 0 ? 1 : lines);
 		if (dctx.flags & REDRAW_STATUS_TOP)

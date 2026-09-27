@@ -1222,6 +1222,51 @@ const struct options_table_entry options_table[] = {
 	  .text = "Style of the status line."
 	},
 
+	{ .name = "panel-enabled",
+	  .type = OPTIONS_TABLE_STRING,
+	  .scope = OPTIONS_TABLE_SESSION,
+	  .flags = OPTIONS_TABLE_IS_ARRAY,
+	  .default_str = "",
+	  .separator = "",
+	  .text = "Whether each indexed panel is on or off."
+	},
+
+	{ .name = "panel-format",
+	  .type = OPTIONS_TABLE_STRING,
+	  .scope = OPTIONS_TABLE_SESSION,
+	  .flags = OPTIONS_TABLE_IS_ARRAY,
+	  .default_str = "",
+	  .separator = "",
+	  .text = "Multiline format for each indexed panel."
+	},
+
+	{ .name = "panel-position",
+	  .type = OPTIONS_TABLE_STRING,
+	  .scope = OPTIONS_TABLE_SESSION,
+	  .flags = OPTIONS_TABLE_IS_ARRAY,
+	  .default_str = "",
+	  .separator = "",
+	  .text = "Edge for each indexed panel: left, right, top or bottom."
+	},
+
+	{ .name = "panel-size",
+	  .type = OPTIONS_TABLE_STRING,
+	  .scope = OPTIONS_TABLE_SESSION,
+	  .flags = OPTIONS_TABLE_IS_ARRAY,
+	  .default_str = "",
+	  .separator = "",
+	  .text = "Width or height in cells of each indexed panel."
+	},
+
+	{ .name = "panel-style",
+	  .type = OPTIONS_TABLE_STRING,
+	  .scope = OPTIONS_TABLE_SESSION,
+	  .flags = OPTIONS_TABLE_IS_ARRAY,
+	  .default_str = "",
+	  .separator = "",
+	  .text = "Style of each indexed panel."
+	},
+
 	{ .name = "pane-status-current-style",
 	  .type = OPTIONS_TABLE_STRING,
 	  .scope = OPTIONS_TABLE_WINDOW,

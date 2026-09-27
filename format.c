@@ -1377,68 +1377,59 @@ format_cb_mouse_line(struct format_tree *ft)
 	return (format_grid_line(gd, gd->hsize + y));
 }
 
+/* Identify the panel that received a mouse event. */
+static void *
+format_cb_mouse_panel(struct format_tree *ft)
+{
+	if (!ft->m.valid || ft->m.panel == -1)
+		return (NULL);
+	if (ft->m.panel == -2)
+		return (xstrdup("status"));
+	if (ft->m.panel == -3)
+		return (xstrdup("side-status"));
+	return (format_printf("%lld", (long long)ft->m.panel));
+}
+
 /* Callback for mouse_status_line. */
 static void *
 format_cb_mouse_status_line(struct format_tree *ft)
 {
-	char	*value;
-	u_int	 y;
-
-	if (!ft->m.valid)
+	if (!ft->m.valid || ft->m.panel == -1 || ft->c == NULL ||
+	    (~ft->c->tty.flags & TTY_STARTED))
 		return (NULL);
-	if (ft->c == NULL || (~ft->c->tty.flags & TTY_STARTED))
-		return (NULL);
-
-	if (ft->m.statusat == 0 && ft->m.y < ft->m.statuslines) {
-		y = ft->m.y;
-	} else if (ft->m.statusat > 0 && ft->m.y >= (u_int)ft->m.statusat) {
-		y = ft->m.y - ft->m.statusat;
-	} else if (ft->m.sideat != -1 &&
-	    ft->m.x >= (u_int)ft->m.sideat &&
-	    ft->m.x < ft->m.sideat + ft->m.sidecols) {
-		if (ft->m.statusat == 0)
-			y = ft->m.y - ft->m.statuslines;
-		else
-			y = ft->m.y;
-	} else
-		return (NULL);
-	xasprintf(&value, "%u", y);
-	return (value);
-
+	return (format_printf("%u", ft->m.y - ft->m.panel_y));
 }
 
 /* Callback for mouse_status_range. */
 static void *
 format_cb_mouse_status_range(struct format_tree *ft)
 {
-	struct style_range	*sr;
-	u_int			 x, y;
+	struct style_range *sr = NULL;
+	struct status_panel_layout *layout;
+	struct status_panel *panel;
+	u_int x, y, i;
 
-	if (!ft->m.valid)
+	if (!ft->m.valid || ft->m.panel == -1 || ft->c == NULL ||
+	    (~ft->c->tty.flags & TTY_STARTED))
 		return (NULL);
-	if (ft->c == NULL || (~ft->c->tty.flags & TTY_STARTED))
-		return (NULL);
-
-	if (ft->m.statusat == 0 && ft->m.y < ft->m.statuslines) {
-		x = ft->m.x;
-		y = ft->m.y;
+	x = ft->m.x - ft->m.panel_x;
+	y = ft->m.y - ft->m.panel_y;
+	if (ft->m.panel == -2)
 		sr = status_get_range(ft->c, x, y);
-	} else if (ft->m.statusat > 0 && ft->m.y >= (u_int)ft->m.statusat) {
-		x = ft->m.x;
-		y = ft->m.y - ft->m.statusat;
-		sr = status_get_range(ft->c, x, y);
-	} else if (ft->m.sideat != -1 &&
-	    ft->m.x >= (u_int)ft->m.sideat &&
-	    ft->m.x < ft->m.sideat + ft->m.sidecols) {
-		x = ft->m.x - ft->m.sideat;
-		if (ft->m.statusat == 0)
-			y = ft->m.y - ft->m.statuslines;
-		else
-			y = ft->m.y;
+	else if (ft->m.panel == -3)
 		sr = status_side_get_range(ft->c, x, y);
-	} else
-		return (NULL);
-
+	else {
+		layout = status_panels_get(ft->c);
+		for (i = 0; i < layout->count; i++) {
+			panel = layout->panels[i];
+			if (panel->index == (u_int)ft->m.panel &&
+			    panel->x == ft->m.panel_x &&
+			    panel->y == ft->m.panel_y) {
+				sr = status_panels_get_range(panel, x, y);
+				break;
+			}
+		}
+	}
 	if (sr == NULL)
 		return (NULL);
 	switch (sr->type) {
@@ -2101,19 +2092,12 @@ format_cb_mouse_x(struct format_tree *ft)
 
 	if (!ft->m.valid)
 		return (NULL);
+	if (ft->m.panel != -1 && ft->c != NULL &&
+	    (ft->c->tty.flags & TTY_STARTED))
+		return (format_printf("%u", ft->m.x - ft->m.panel_x));
 	wp = cmd_mouse_pane(&ft->m, NULL, NULL);
 	if (wp != NULL && cmd_mouse_at(wp, &ft->m, &x, &y, 0) == 0)
 		return (format_printf("%u", x));
-	if (ft->c != NULL && (ft->c->tty.flags & TTY_STARTED)) {
-		if (ft->m.statusat == 0 && ft->m.y < ft->m.statuslines)
-			return (format_printf("%u", ft->m.x));
-		if (ft->m.statusat > 0 && ft->m.y >= (u_int)ft->m.statusat)
-			return (format_printf("%u", ft->m.x));
-		if (ft->m.sideat != -1 &&
-		    ft->m.x >= (u_int)ft->m.sideat &&
-		    ft->m.x < ft->m.sideat + ft->m.sidecols)
-			return (format_printf("%u", ft->m.x - ft->m.sideat));
-	}
 	return (NULL);
 }
 
@@ -2126,24 +2110,12 @@ format_cb_mouse_y(struct format_tree *ft)
 
 	if (!ft->m.valid)
 		return (NULL);
+	if (ft->m.panel != -1 && ft->c != NULL &&
+	    (ft->c->tty.flags & TTY_STARTED))
+		return (format_printf("%u", ft->m.y - ft->m.panel_y));
 	wp = cmd_mouse_pane(&ft->m, NULL, NULL);
 	if (wp != NULL && cmd_mouse_at(wp, &ft->m, &x, &y, 0) == 0)
 		return (format_printf("%u", y));
-	if (ft->c != NULL && (ft->c->tty.flags & TTY_STARTED)) {
-		if (ft->m.statusat == 0 && ft->m.y < ft->m.statuslines)
-			return (format_printf("%u", ft->m.y));
-		if (ft->m.statusat > 0 && ft->m.y >= (u_int)ft->m.statusat)
-			return (format_printf("%u", ft->m.y - ft->m.statusat));
-		if (ft->m.sideat != -1 &&
-		    ft->m.x >= (u_int)ft->m.sideat &&
-		    ft->m.x < ft->m.sideat + ft->m.sidecols) {
-			if (ft->m.statusat == 0)
-				y = ft->m.y - ft->m.statuslines;
-			else
-				y = ft->m.y;
-			return (format_printf("%u", y));
-		}
-	}
 	return (NULL);
 }
 
@@ -3809,6 +3781,9 @@ static const struct format_table_entry format_table[] = {
 	},
 	{ "mouse_pane", FORMAT_TABLE_STRING,
 	  format_cb_mouse_pane
+	},
+	{ "mouse_panel", FORMAT_TABLE_STRING,
+	  format_cb_mouse_panel
 	},
 	{ "mouse_sgr_flag", FORMAT_TABLE_STRING,
 	  format_cb_mouse_sgr_flag

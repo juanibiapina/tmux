@@ -1,3 +1,9 @@
+CHANGES FROM 3.8 TO 3.9
+
+* Add configurable panels on every edge of the terminal, with multiple panels
+  per side that can be shown or hidden independently. Existing status line
+  options continue to work.
+
 CHANGES FROM 3.7c TO 3.8
 
 * Many improvements to floating panes:

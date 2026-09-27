@@ -70,7 +70,8 @@ status_timer_start(struct client *c)
 
 	if (s != NULL &&
 	    (options_get_number(s->options, "status") ||
-	    options_get_number(s->options, "side-status")))
+	    options_get_number(s->options, "side-status") ||
+	    status_panels_get(c)->count != 0))
 		status_timer_callback(-1, 0, c);
 }
 
@@ -161,18 +162,282 @@ status_side_at_column(struct client *c)
 		return (-1);
 	if (s->sidestatusat == 0)
 		return (0);
-	return (c->tty.sx - width);
+	return (status_panels_get(c)->side_x);
 }
 
 /* Get number of rows of side status line for client. */
 u_int
 status_side_rows(struct client *c)
 {
-	u_int	lines = status_line_size(c);
-
-	if (status_side_size(c) == 0 || c->tty.sy <= lines)
+	if (status_side_size(c) == 0)
 		return (0);
-	return (c->tty.sy - lines);
+	return (status_panels_get(c)->side_sy);
+}
+
+/* Panel rectangles are local to each client; option changes invalidate them. */
+static u_int status_panels_generation = 1;
+
+void
+status_panels_invalidate(void)
+{
+	status_panels_generation++;
+}
+
+static const char *
+status_panel_value(struct options *oo, const char *name, u_int index)
+{
+	struct options_entry *o = options_get(oo, name);
+	union options_value *ov;
+
+	if (o == NULL || (ov = options_array_getv(o, "%u", index)) == NULL)
+		return (NULL);
+	return (ov->string);
+}
+
+static void
+status_panels_clear(struct client *c)
+{
+	struct status_panel_layout *layout = &c->panels;
+	struct side_status_line *line;
+	u_int i;
+
+	for (i = 0; i < layout->count; i++) {
+		line = &layout->panels[i]->line;
+		style_ranges_free(&line->ranges);
+		free(line->expanded);
+		screen_free(&line->screen);
+		free(layout->panels[i]);
+	}
+	free(layout->panels);
+	layout->panels = NULL;
+	layout->count = 0;
+}
+
+static void
+status_panels_add(struct status_panel_layout *layout, u_int index,
+    enum status_panel_edge edge, u_int x, u_int y, u_int sx, u_int sy)
+{
+	struct status_panel *panel;
+
+	layout->panels = xreallocarray(layout->panels, layout->count + 1,
+	    sizeof *layout->panels);
+	panel = xcalloc(1, sizeof *panel);
+	layout->panels[layout->count++] = panel;
+	panel->index = index;
+	panel->edge = edge;
+	panel->x = x;
+	panel->y = y;
+	panel->sx = sx;
+	panel->sy = sy;
+	screen_init(&panel->line.screen, 1, 1, 0);
+	panel->line.linex = -1;
+	style_ranges_init(&panel->line.ranges);
+}
+
+struct status_panel_layout *
+status_panels_get(struct client *c)
+{
+	struct status_panel_layout *layout = &c->panels;
+	struct options *oo;
+	struct options_entry *o;
+	struct options_array_item *item;
+	const char *key, *value, *enabled;
+	const char *errstr;
+	u_int top = 0, bottom = 0, left = 0, right = 0;
+	u_int status, side, index, size, pass;
+	long long n;
+	enum status_panel_edge edge;
+
+	if (layout->generation == status_panels_generation &&
+	    layout->tty_sx == c->tty.sx && layout->tty_sy == c->tty.sy &&
+	    layout->session == c->session)
+		return (layout);
+	status_panels_clear(c);
+	layout->generation = status_panels_generation;
+	layout->tty_sx = c->tty.sx;
+	layout->tty_sy = c->tty.sy;
+	layout->session = c->session;
+	layout->x = layout->y = layout->side_x = layout->side_y = 0;
+	layout->sx = c->tty.sx;
+	layout->sy = c->tty.sy;
+	layout->side_sx = layout->side_sy = 0;
+	if (c->session == NULL || (c->flags & CLIENT_CONTROL) ||
+	    c->tty.sx == 0 || c->tty.sy == 0)
+		return (layout);
+
+	oo = c->session->options;
+	status = options_get_number(oo, "status");
+	if (status >= c->tty.sy)
+		status = 0;
+	if (options_get_number(oo, "status-position") == 0)
+		top = status;
+	else
+		bottom = status;
+
+	/* First reserve the legacy areas, then add horizontal custom panels. */
+	side = options_get_number(oo, "side-status-width");
+	switch (options_get_number(oo, "side-status")) {
+	case 1:
+		if (side < c->tty.sx)
+			left = side;
+		break;
+	case 2:
+		if (side < c->tty.sx)
+			right = side;
+		break;
+	}
+	o = options_get(oo, "panel-position");
+	if (o != NULL) {
+		for (pass = 0; pass < 2; pass++) {
+			for (item = options_array_first(o); item != NULL;
+			    item = options_array_next(item)) {
+				key = options_array_item_key(item);
+				n = strtonum(key, 0, UINT_MAX, &errstr);
+				if (errstr != NULL)
+					continue;
+				index = n;
+				enabled = status_panel_value(oo,
+				    "panel-enabled", index);
+				if (enabled != NULL && strcmp(enabled, "off") == 0)
+					continue;
+				value = options_array_item_value(item)->string;
+				if (strcmp(value, "top") == 0)
+					edge = STATUS_PANEL_TOP;
+				else if (strcmp(value, "bottom") == 0)
+					edge = STATUS_PANEL_BOTTOM;
+				else if (strcmp(value, "left") == 0)
+					edge = STATUS_PANEL_LEFT;
+				else if (strcmp(value, "right") == 0)
+					edge = STATUS_PANEL_RIGHT;
+				else
+					continue;
+				if ((pass == 0) != (edge == STATUS_PANEL_TOP ||
+				    edge == STATUS_PANEL_BOTTOM))
+					continue;
+				value = status_panel_value(oo, "panel-size", index);
+				if (value == NULL)
+					size = 1;
+				else {
+					n = strtonum(value, 1, SHRT_MAX, &errstr);
+					if (errstr != NULL)
+						continue;
+					size = n;
+				}
+				if (pass == 0) {
+					if (size >= c->tty.sy - top - bottom)
+						continue;
+					if (edge == STATUS_PANEL_TOP) {
+						status_panels_add(layout, index, edge,
+						    0, top, c->tty.sx, size);
+						top += size;
+					} else {
+						bottom += size;
+						status_panels_add(layout, index, edge,
+						    0, c->tty.sy - bottom,
+						    c->tty.sx, size);
+					}
+				} else {
+					if (size >= c->tty.sx - left - right)
+						continue;
+					if (edge == STATUS_PANEL_LEFT) {
+						status_panels_add(layout, index, edge,
+						    left, top, size,
+						    c->tty.sy - top - bottom);
+						left += size;
+					} else {
+						right += size;
+						status_panels_add(layout, index, edge,
+						    c->tty.sx - right, top, size,
+						    c->tty.sy - top - bottom);
+					}
+				}
+			}
+		}
+	}
+	layout->x = left;
+	layout->y = top;
+	layout->sx = c->tty.sx - left - right;
+	layout->sy = c->tty.sy - top - bottom;
+	layout->side_y = top;
+	layout->side_sy = layout->sy;
+	if (options_get_number(oo, "side-status") == 1 && side < c->tty.sx) {
+		layout->side_x = 0;
+		layout->side_sx = side;
+	} else if (options_get_number(oo, "side-status") == 2 &&
+	    side < c->tty.sx) {
+		layout->side_x = c->tty.sx - side;
+		layout->side_sx = side;
+	}
+	return (layout);
+}
+
+void
+status_panels_window(struct client *c, u_int *x, u_int *y, u_int *sx,
+    u_int *sy)
+{
+	struct status_panel_layout *layout = status_panels_get(c);
+
+	if (x != NULL)
+		*x = layout->x;
+	if (y != NULL)
+		*y = layout->y;
+	if (sx != NULL)
+		*sx = layout->sx;
+	if (sy != NULL)
+		*sy = layout->sy;
+}
+
+struct status_panel *
+status_panels_at(struct client *c, u_int x, u_int y)
+{
+	struct status_panel_layout *layout = status_panels_get(c);
+	struct status_panel *panel;
+	u_int i;
+
+	for (i = 0; i < layout->count; i++) {
+		panel = layout->panels[i];
+		if (x >= panel->x && x - panel->x < panel->sx &&
+		    y >= panel->y && y - panel->y < panel->sy)
+			return (panel);
+	}
+	return (NULL);
+}
+
+struct style_range *
+status_panels_get_range(struct status_panel *panel, u_int x, u_int y)
+{
+	if (panel->line.linex == 0) {
+		if (x == 0)
+			return (NULL);
+		x--;
+	} else if (panel->line.linex != -1 &&
+	    x == (u_int)panel->line.linex)
+		return (NULL);
+	return (style_ranges_get_range_at(&panel->line.ranges, x, y));
+}
+
+u_int
+status_panels_mouse_x(struct mouse_event *m, u_int x)
+{
+	if (m->window_sx == 0)
+		return (m->ox);
+	if (x < m->window_x)
+		x = m->window_x;
+	else if (x - m->window_x >= m->window_sx)
+		x = m->window_x + m->window_sx - 1;
+	return (x - m->window_x + m->ox);
+}
+
+u_int
+status_panels_mouse_y(struct mouse_event *m, u_int y)
+{
+	if (m->window_sy == 0)
+		return (m->oy);
+	if (y < m->window_y)
+		y = m->window_y;
+	else if (y - m->window_y >= m->window_sy)
+		y = m->window_y + m->window_sy - 1;
+	return (y - m->window_y + m->oy);
 }
 
 /* Get the prompt line number for client's session. 1 means at the bottom. */
@@ -387,6 +652,7 @@ status_side_free(struct client *c)
 	style_ranges_free(&ss->ranges);
 	free(ss->expanded);
 	screen_free(&ss->screen);
+	status_panels_clear(c);
 }
 
 /*
@@ -422,79 +688,41 @@ status_side_get_range(struct client *c, u_int x, u_int y)
 	return (style_ranges_get_range_at(&ss->ranges, x, y));
 }
 
-/* Draw side status line for client. Returns 1 if changed. */
-int
-status_side_redraw(struct client *c)
+/* Render a formatted rectangle and own the expanded format string. */
+static int
+status_panel_draw_line(struct side_status_line *line, u_int width, u_int rows,
+    int linex, const struct grid_cell *gc, char *expanded)
 {
-	struct side_status_line		*ss = &c->side_status;
-	struct session			*s = c->session;
-	struct screen_write_ctx		 ctx;
-	struct grid_cell		 gc, lgc;
-	struct format_tree		*ft;
-	char				*expanded;
-	u_int				 width, rows, n;
-	int				 flags, force = 0, linex;
+	struct screen_write_ctx ctx;
+	struct grid_cell lgc;
+	u_int n;
+	int force = 0;
 
-	log_debug("%s enter", __func__);
-
-	/* No side status line? */
-	width = status_side_size(c);
-	rows = status_side_rows(c);
-	if (width == 0 || rows == 0)
-		return (0);
-
-	/* Create format tree. */
-	flags = FORMAT_STATUS;
-	if (c->flags & CLIENT_STATUSFORCE)
-		flags |= FORMAT_FORCE;
-	ft = format_create(c, NULL, FORMAT_NONE, flags);
-	format_defaults(ft, c, NULL, NULL, NULL);
-
-	/* Set up default colour. */
-	style_apply(&gc, s->options, "side-status-style", ft);
-	if (!grid_cells_equal(&gc, &ss->style)) {
+	if (!grid_cells_equal(gc, &line->style)) {
 		force = 1;
-		memcpy(&ss->style, &gc, sizeof ss->style);
+		memcpy(&line->style, gc, sizeof *gc);
 	}
-
-	/* Resize the target screen. */
-	if (screen_size_x(&ss->screen) != width ||
-	    screen_size_y(&ss->screen) != rows) {
-		screen_resize(&ss->screen, width, rows, 0);
+	if (screen_size_x(&line->screen) != width ||
+	    screen_size_y(&line->screen) != rows) {
+		screen_resize(&line->screen, width, rows, 0);
 		force = 1;
 	}
-
-	/* The line moves if the side status line changes side. */
-	linex = status_side_line_at(c);
-	if (linex != ss->linex) {
+	if (linex != line->linex) {
+		line->linex = linex;
 		force = 1;
-		ss->linex = linex;
 	}
-
-	/* Expand the format. */
-	expanded = format_expand_time(ft,
-	    options_get_string(s->options, "side-status-format"));
-	format_free(ft);
-
-	/* Skip the redraw if nothing has changed. */
-	if (!force &&
-	    ss->expanded != NULL &&
-	    strcmp(expanded, ss->expanded) == 0) {
+	if (!force && line->expanded != NULL &&
+	    strcmp(expanded, line->expanded) == 0) {
 		free(expanded);
-		log_debug("%s exit: unchanged", __func__);
 		return (0);
 	}
-
-	/* Draw the rows over a blank background. */
-	screen_write_start(&ctx, &ss->screen);
+	screen_write_start(&ctx, &line->screen);
 	screen_write_cursormove(&ctx, 0, 0, 0);
 	for (n = 0; n < width * rows; n++)
-		screen_write_putc(&ctx, &gc, ' ');
-	style_ranges_free(&ss->ranges);
-
-	/* Draw the line on the edge next to the window area. */
+		screen_write_putc(&ctx, gc, ' ');
+	style_ranges_free(&line->ranges);
 	if (linex != -1) {
-		memcpy(&lgc, &gc, sizeof lgc);
+		memcpy(&lgc, gc, sizeof lgc);
 		lgc.attr |= GRID_ATTR_CHARSET;
 		for (n = 0; n < rows; n++) {
 			screen_write_cursormove(&ctx, linex, n, 0);
@@ -502,17 +730,104 @@ status_side_redraw(struct client *c)
 		}
 		width--;
 	}
-
 	screen_write_cursormove(&ctx, 0, 0, 0);
-	format_draw_lines(&ctx, &gc, linex == 0 ? 1 : 0, width, rows, expanded,
-	    &ss->ranges, 0);
+	format_draw_lines(&ctx, gc, linex == 0 ? 1 : 0, width, rows,
+	    expanded, &line->ranges, 0);
 	screen_write_stop(&ctx);
-
-	free(ss->expanded);
-	ss->expanded = expanded;
-
-	log_debug("%s exit: changed", __func__);
+	free(line->expanded);
+	line->expanded = expanded;
 	return (1);
+}
+
+/* Draw the legacy side status with its own format and style options. */
+int
+status_side_redraw(struct client *c)
+{
+	struct session *s = c->session;
+	struct format_tree *ft;
+	struct grid_cell gc;
+	char *expanded;
+	u_int width = status_side_size(c), rows = status_side_rows(c);
+	int flags = FORMAT_STATUS;
+
+	if (width == 0 || rows == 0)
+		return (0);
+	if (c->flags & CLIENT_STATUSFORCE)
+		flags |= FORMAT_FORCE;
+	ft = format_create(c, NULL, FORMAT_NONE, flags);
+	format_defaults(ft, c, NULL, NULL, NULL);
+	style_apply(&gc, s->options, "side-status-style", ft);
+	expanded = format_expand_time(ft,
+	    options_get_string(s->options, "side-status-format"));
+	format_free(ft);
+	return (status_panel_draw_line(&c->side_status, width, rows,
+	    status_side_line_at(c), &gc, expanded));
+}
+
+/* Draw one configured panel into its client screen. */
+static int
+status_panel_redraw(struct client *c, struct status_panel *panel)
+{
+	struct format_tree *ft;
+	struct grid_cell gc;
+	struct style sy;
+	const char *format, *value;
+	char *expanded, *style;
+	int linex = -1, flags = FORMAT_STATUS;
+
+	if (c->flags & CLIENT_STATUSFORCE)
+		flags |= FORMAT_FORCE;
+	ft = format_create(c, NULL, FORMAT_NONE, flags);
+	format_defaults(ft, c, NULL, NULL, NULL);
+	style_apply(&gc, c->session->options, "status-style", ft);
+	value = status_panel_value(c->session->options, "panel-style",
+	    panel->index);
+	if (value != NULL) {
+		style = format_expand(ft, value);
+		style_set(&sy, &gc);
+		if (style_parse(&sy, &gc, style) == 0)
+			gc = sy.gc;
+		free(style);
+	}
+	if (panel->edge == STATUS_PANEL_LEFT && panel->sx >= 2)
+		linex = panel->sx - 1;
+	else if (panel->edge == STATUS_PANEL_RIGHT && panel->sx >= 2)
+		linex = 0;
+	format = status_panel_value(c->session->options, "panel-format",
+	    panel->index);
+	expanded = format_expand_time(ft, format == NULL ? "" : format);
+	format_free(ft);
+	return (status_panel_draw_line(&panel->line, panel->sx, panel->sy,
+	    linex, &gc, expanded));
+}
+
+int
+status_panels_redraw(struct client *c, int force)
+{
+	struct status_panel_layout *layout = status_panels_get(c);
+	u_int i;
+	int changed = 0;
+
+	for (i = 0; i < layout->count; i++) {
+		if (status_panel_redraw(c, layout->panels[i]) || force)
+			changed = 1;
+	}
+	return (changed);
+}
+
+void
+status_panels_draw(struct client *c)
+{
+	struct status_panel_layout *layout = status_panels_get(c);
+	struct status_panel *panel;
+	u_int i, y;
+
+	for (i = 0; i < layout->count; i++) {
+		panel = layout->panels[i];
+		for (y = 0; y < panel->sy; y++)
+			tty_draw_line(&c->tty, &panel->line.screen, 0, y,
+			    panel->sx, panel->x, panel->y + y, NULL);
+	}
 }
 
 /* Escape # characters in a string so format_draw treats them as literal. */

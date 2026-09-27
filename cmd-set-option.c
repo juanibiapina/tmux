@@ -230,13 +230,13 @@ cmd_set_option_exec(struct cmd *self, struct cmdq_item *item)
 	int				 append = args_has(args, 'a');
 	struct cmd_find_state		*target = cmdq_get_target(item);
 	struct window_pane		*loop;
-	struct options			*oo;
+	struct options			*oo, *validation;
 	struct options_entry		*parent, *o, *po;
 	char				*name, *argument, *cause;
 	char				*expanded = NULL, *array_key = NULL;
 	const char			*value;
 	int				 window, already, error, ambiguous;
-	int				 scope;
+	int				 scope, created_array = 0;
 
 	window = (cmd_get_entry(self) == &cmd_set_window_option_entry);
 	if (cmd_get_entry(self) == &cmd_set_hook_entry && args_has(args, 'E'))
@@ -361,8 +361,22 @@ cmd_set_option_exec(struct cmd *self, struct cmdq_item *item)
 			cmdq_error(item, "empty value");
 			goto fail;
 		}
-		if (o == NULL)
+		if (array_key == NULL && strncmp(name, "panel-", 6) == 0 &&
+		    *value != '\0') {
+			validation = options_create(NULL);
+			po = options_empty(validation, options_table_entry(parent));
+			error = options_array_assign(po, value, &cause);
+			options_free(validation);
+			if (error != 0) {
+				cmdq_error(item, "%s", cause);
+				free(cause);
+				goto fail;
+			}
+		}
+		if (o == NULL) {
 			o = options_empty(oo, options_table_entry(parent));
+			created_array = 1;
+		}
 		if (array_key == NULL) {
 			if (!append)
 				options_array_clear(o);
@@ -389,6 +403,8 @@ out:
 	return (CMD_RETURN_NORMAL);
 
 fail:
+	if (created_array)
+		options_remove_or_default(o, NULL, NULL);
 	free(argument);
 	free(expanded);
 	free(name);

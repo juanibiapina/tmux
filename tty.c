@@ -952,8 +952,10 @@ tty_window_bigger(struct tty *tty)
 	struct client	*c = tty->client;
 	struct window	*w = c->session->curw->window;
 
-	return (tty->sx - status_side_size(c) < w->sx ||
-	    tty->sy - status_line_size(c) < w->sy);
+	u_int sx, sy;
+
+	status_panels_window(c, NULL, NULL, &sx, &sy);
+	return (sx < w->sx || sy < w->sy);
 }
 
 /* What offset should this window be drawn at? */
@@ -975,12 +977,11 @@ tty_window_offset1(struct tty *tty, u_int *ox, u_int *oy, u_int *sx, u_int *sy)
 	struct client		*c = tty->client;
 	struct window		*w = c->session->curw->window;
 	struct window_pane	*wp = w->active;
-	u_int			 cx, cy, lines, side;
+	u_int			 cx, cy, available_x, available_y;
 
-	lines = status_line_size(c);
-	side = status_side_size(c);
+	status_panels_window(c, NULL, NULL, &available_x, &available_y);
 
-	if (tty->sx - side >= w->sx && tty->sy - lines >= w->sy) {
+	if (available_x >= w->sx && available_y >= w->sy) {
 		*ox = 0;
 		*oy = 0;
 		*sx = w->sx;
@@ -990,8 +991,8 @@ tty_window_offset1(struct tty *tty, u_int *ox, u_int *oy, u_int *sx, u_int *sy)
 		return (0);
 	}
 
-	*sx = tty->sx - side;
-	*sy = tty->sy - lines;
+	*sx = available_x;
+	*sy = available_y;
 
 	if (c->pan_window == w) {
 		if (*sx >= w->sx)
@@ -1477,10 +1478,13 @@ tty_set_client_cb(struct tty_ctx *ttyctx, struct client *c)
 
 	ttyctx->xoff = ttyctx->rxoff = wp->xoff;
 	ttyctx->yoff = ttyctx->ryoff = wp->yoff;
-	if (status_at_line(c) == 0)
-		ttyctx->yoff += status_line_size(c);
-	if (status_side_at_column(c) == 0)
-		ttyctx->xoff += status_side_size(c);
+	{
+		u_int panel_x, panel_y;
+
+		status_panels_window(c, &panel_x, &panel_y, NULL, NULL);
+		ttyctx->xoff += panel_x;
+		ttyctx->yoff += panel_y;
+	}
 
 	return (1);
 }

@@ -814,6 +814,7 @@ server_client_check_mouse(struct client *c, struct key_event *event)
 	key_code			 key;
 	struct timeval			 tv;
 	struct style_range		*sr;
+	struct status_panel		*panel;
 	enum key_code_type		 type = KEYC_TYPE_NOTYPE;
 	enum key_code_mouse_location	 loc = KEYC_MOUSE_LOCATION_NOWHERE;
 
@@ -908,9 +909,17 @@ have_event:
 	m->statuslines = status_line_size(c);
 	m->sideat = status_side_at_column(c);
 	m->sidecols = status_side_size(c);
+	status_panels_window(c, &m->window_x, &m->window_y,
+	    &m->window_sx, &m->window_sy);
+	m->panel = -1;
+	m->panel_x = m->panel_y = m->panel_sx = m->panel_sy = 0;
 	if (m->statusat != -1 &&
 	    y >= (u_int)m->statusat &&
 	    y < m->statusat + m->statuslines) {
+		m->panel = -2;
+		m->panel_y = m->statusat;
+		m->panel_sx = c->tty.sx;
+		m->panel_sy = m->statuslines;
 		sr = status_get_range(c, x, y - m->statusat);
 		if (sr == NULL)
 			loc = KEYC_MOUSE_LOCATION_STATUS_DEFAULT;
@@ -923,11 +932,13 @@ have_event:
 	    m->sideat != -1 &&
 	    x >= (u_int)m->sideat &&
 	    x < m->sideat + m->sidecols) {
-		if (m->statusat == 0)
-			sidey = m->statuslines;
-		else
-			sidey = 0;
+		sidey = status_panels_get(c)->side_y;
 		if (y >= sidey && y - sidey < status_side_rows(c)) {
+			m->panel = -3;
+			m->panel_x = m->sideat;
+			m->panel_y = sidey;
+			m->panel_sx = m->sidecols;
+			m->panel_sy = status_side_rows(c);
 			sr = status_side_get_range(c, x - m->sideat,
 			    y - sidey);
 			if (sr == NULL)
@@ -938,10 +949,22 @@ have_event:
 		}
 	}
 
-	/*
-	 * Not on status line. Adjust position and check for border, pane, or
-	 * scrollbar.
-	 */
+	if (loc == KEYC_MOUSE_LOCATION_NOWHERE &&
+	    (panel = status_panels_at(c, x, y)) != NULL) {
+		m->panel = panel->index;
+		m->panel_x = panel->x;
+		m->panel_y = panel->y;
+		m->panel_sx = panel->sx;
+		m->panel_sy = panel->sy;
+		sr = status_panels_get_range(panel, x - panel->x,
+		    y - panel->y);
+		if (sr == NULL)
+			loc = KEYC_MOUSE_LOCATION_STATUS_DEFAULT;
+		else if (server_client_range_location(s, sr, m, &loc) != 0)
+			return (KEYC_UNKNOWN);
+	}
+
+	/* Adjust window position and check for border, pane, or scrollbar. */
 	if (loc == KEYC_MOUSE_LOCATION_NOWHERE && c->tty.mouse_scrolling_flag) {
 		if (lwp != NULL) {
 			loc = KEYC_MOUSE_LOCATION_SCROLLBAR_SLIDER;
@@ -949,28 +972,13 @@ have_event:
 			m->w = lwp->window->id;
 		}
 	} else if (loc == KEYC_MOUSE_LOCATION_NOWHERE) {
-		if (m->sideat == 0 && x >= m->sidecols)
-			px = x - m->sidecols;
-		else if (m->sideat > 0 && x >= (u_int)m->sideat)
-			px = m->sideat - 1;
-		else
-			px = x;
-		if (m->statusat == 0 && y >= m->statuslines)
-			py = y - m->statuslines;
-		else if (m->statusat > 0 && y >= (u_int)m->statusat)
-			py = m->statusat - 1;
-		else
-			py = y;
-
 		tty_window_offset(&c->tty, &m->ox, &m->oy, &sx, &sy);
 		log_debug("mouse window @%u at %u,%u (%ux%u)", w->id, m->ox,
 		    m->oy, sx, sy);
-		if (px > sx || py > sy) {
-			server_client_update_scrollbar_hover(c, type, -1, -1);
+		if (sx == 0 || sy == 0)
 			return (KEYC_UNKNOWN);
-		}
-		px = px + m->ox;
-		py = py + m->oy;
+		px = status_panels_mouse_x(m, x);
+		py = status_panels_mouse_y(m, y);
 		if (w->modal != NULL &&
 		    !window_pane_contains(w->modal, px, py)) {
 			if (lwp == w->modal &&
@@ -1132,11 +1140,7 @@ have_event:
 		if (c->tty.mouse_scrolling_flag == 0 &&
 		    loc == KEYC_MOUSE_LOCATION_SCROLLBAR_SLIDER) {
 			c->tty.mouse_scrolling_flag = 1;
-			if (m->statusat == 0) {
-				c->tty.mouse_slider_mpos = sl_mpos +
-				    m->statuslines;
-			} else
-				c->tty.mouse_slider_mpos = sl_mpos;
+			c->tty.mouse_slider_mpos = sl_mpos + m->window_y;
 		}
 	}
 
@@ -1630,7 +1634,7 @@ server_client_handle_menu_key(struct client *c, struct key_event *event)
 	struct window		*w = c->session->curw->window;
 	struct key_event	 new_event;
 	struct mouse_event	*m;
-	u_int			 ox, oy, sx, sy;
+	u_int			 sx, sy;
 
 	if (w->menu == NULL)
 		return (0);
@@ -1642,26 +1646,17 @@ server_client_handle_menu_key(struct client *c, struct key_event *event)
 		m->statuslines = status_line_size(c);
 		m->sideat = status_side_at_column(c);
 		m->sidecols = status_side_size(c);
+		status_panels_window(c, &m->window_x, &m->window_y,
+		    &m->window_sx, &m->window_sy);
+		tty_window_offset(&c->tty, &m->ox, &m->oy, &sx, &sy);
 
-		tty_window_offset(&c->tty, &ox, &oy, &sx, &sy);
-		if (m->sideat == 0 && m->x < m->sidecols)
-			m->x = m->y = UINT_MAX;
-		else if (m->sideat > 0 && m->x >= (u_int)m->sideat)
+		if (m->x < m->window_x || m->y < m->window_y ||
+		    m->x - m->window_x >= m->window_sx ||
+		    m->y - m->window_y >= m->window_sy)
 			m->x = m->y = UINT_MAX;
 		else {
-			if (m->sideat == 0)
-				m->x -= m->sidecols;
-			m->x += ox;
-			if (m->statusat == 0) {
-				if (m->y < m->statuslines)
-					m->x = m->y = UINT_MAX;
-				else
-					m->y = m->y - m->statuslines + oy;
-			} else if (m->statusat > 0 &&
-			    m->y >= (u_int)m->statusat)
-				m->x = m->y = UINT_MAX;
-			else
-				m->y += oy;
+			m->x = status_panels_mouse_x(m, m->x);
+			m->y = status_panels_mouse_y(m, m->y);
 		}
 	}
 
@@ -2062,10 +2057,13 @@ server_client_prompt_cursor(struct client *c, struct window_pane *wp, int *mode,
 
 	r = window_visible_ranges(wp, *cx, *cy, 1, NULL);
 	if (window_position_is_visible(r, *cx)) {
-		if (status_at_line(c) == 0)
-			*cy += status_line_size(c);
-		if (status_side_at_column(c) == 0)
-			*cx += status_side_size(c);
+		{
+			u_int panel_x, panel_y;
+
+			status_panels_window(c, &panel_x, &panel_y, NULL, NULL);
+			*cx += panel_x;
+			*cy += panel_y;
+		}
 		*mode |= MODE_CURSOR;
 	}
 	return (1);
@@ -2132,10 +2130,14 @@ server_client_reset_state(struct client *c)
 			else {
 				cx -= ox;
 				cy -= oy;
-				if (status_at_line(c) == 0)
-					cy += status_line_size(c);
-				if (status_side_at_column(c) == 0)
-					cx += status_side_size(c);
+				{
+					u_int panel_x, panel_y;
+
+					status_panels_window(c, &panel_x, &panel_y,
+					    NULL, NULL);
+					cx += panel_x;
+					cy += panel_y;
+				}
 			}
 			prompt = 1;
 		} else {
@@ -2173,10 +2175,14 @@ server_client_reset_state(struct client *c)
 						cursor = 0;
 				}
 
-				if (status_at_line(c) == 0)
-					cy += status_line_size(c);
-				if (status_side_at_column(c) == 0)
-					cx += status_side_size(c);
+				{
+					u_int panel_x, panel_y;
+
+					status_panels_window(c, &panel_x, &panel_y,
+					    NULL, NULL);
+					cx += panel_x;
+					cy += panel_y;
+				}
 			}
 
 			if (!cursor)

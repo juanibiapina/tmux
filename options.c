@@ -20,6 +20,7 @@
 
 #include <ctype.h>
 #include <fnmatch.h>
+#include <limits.h>
 #include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
@@ -571,6 +572,47 @@ options_array_set(struct options_entry *o, const char *key, const char *value,
 			options_array_free(o, a);
 		free(new_key);
 		return (0);
+	}
+
+	if (strncmp(o->name, "panel-", 6) == 0) {
+		const char *errstr;
+		const char *check = value;
+		struct style sy;
+		u_int index;
+		int valid = 1;
+
+		if (options_array_key_to_number(new_key, &index) != 1)
+			valid = 0;
+		a = options_array_item(o, new_key);
+		if (append && a != NULL) {
+			xasprintf(&new, "%s%s", a->value.string, value);
+			check = new;
+		} else
+			new = NULL;
+		if (strcmp(o->name, "panel-position") == 0)
+			valid &= (strcmp(check, "left") == 0 ||
+			    strcmp(check, "right") == 0 ||
+			    strcmp(check, "top") == 0 ||
+			    strcmp(check, "bottom") == 0);
+		else if (strcmp(o->name, "panel-enabled") == 0)
+			valid &= (strcmp(check, "on") == 0 ||
+			    strcmp(check, "off") == 0);
+		else if (strcmp(o->name, "panel-size") == 0) {
+			strtonum(check, 1, SHRT_MAX, &errstr);
+			valid &= (errstr == NULL);
+		} else if (strcmp(o->name, "panel-style") == 0 &&
+		    strstr(check, "#{") == NULL) {
+			style_set(&sy, &grid_default_cell);
+			valid &= (style_parse(&sy, &grid_default_cell, check) == 0);
+		}
+		free(new);
+		if (!valid) {
+			if (cause != NULL)
+				xasprintf(cause, "invalid %s[%s]: %s", o->name,
+				    new_key, value);
+			free(new_key);
+			return (-1);
+		}
 	}
 
 	if (OPTIONS_IS_COMMAND(o)) {
@@ -1364,6 +1406,7 @@ options_push_changes(const char *name)
 	struct window_pane	*wp;
 
 	log_debug("%s: %s", __func__, name);
+	status_panels_invalidate();
 
 	if (strcmp(name, "theme") == 0 ||
 	    strncmp(name, "dark-theme-", 11) == 0 ||
@@ -1408,12 +1451,17 @@ options_push_changes(const char *name)
 	}
 	if (strcmp(name, "status") == 0 ||
 	    strcmp(name, "status-interval") == 0 ||
-	    strcmp(name, "side-status") == 0)
+	    strcmp(name, "side-status") == 0 ||
+	    strcmp(name, "panel-position") == 0 ||
+	    strcmp(name, "panel-enabled") == 0)
 		status_timer_start_all();
 	if (strcmp(name, "status") == 0 ||
 	    strcmp(name, "status-position") == 0 ||
 	    strcmp(name, "side-status") == 0 ||
 	    strcmp(name, "side-status-width") == 0 ||
+	    strcmp(name, "panel-position") == 0 ||
+	    strcmp(name, "panel-enabled") == 0 ||
+	    strcmp(name, "panel-size") == 0 ||
 	    strcmp(name, "pane-border-indicators") == 0 ||
 	    strcmp(name, "pane-border-lines") == 0 ||
 	    strcmp(name, "pane-border-status") == 0 ||
